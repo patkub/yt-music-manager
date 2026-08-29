@@ -55,6 +55,11 @@ COOKIES_BROWSER = "chrome"
 
 # Matches the standard 11-char YouTube video id out of most URL shapes.
 YT_ID_RE = re.compile(r"(?:v=|/|^)([A-Za-z0-9_-]{11})(?:[&?/]|$)")
+WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -96,11 +101,42 @@ def sanitize_folder_name(name: str) -> str:
     """Turn an artist name into a safe folder name."""
     name = name.strip()
     name = re.sub(r'[\\/*?:"<>|]', "", name)
+    name = re.sub(r"[\x00-\x1f\x7f]", "", name)
     name = re.sub(r"\s+", " ", name)
+    name = name.rstrip(". ")
+    if name in {"", ".", ".."} or name.split(".", 1)[0].upper() in WINDOWS_RESERVED_NAMES:
+        name = "Unknown Artist"
     return name or "Unknown Artist"
 
 
-def check_yt_dlp_available():
+def artist_folder_path(store: Store, artist: dict) -> Path | None:
+    """Return a configured artist folder only when it stays inside base_dir."""
+    folder = artist.get("folder")
+    if not isinstance(folder, str) or not folder:
+        print(f"[!] Artist '{artist.get('name', '<unknown>')}' has an invalid folder setting.")
+        return None
+
+    base_path = store.base_dir.resolve()
+    folder_path = (base_path / folder).resolve()
+    if folder_path == base_path or base_path not in folder_path.parents:
+        print(f"[!] Refusing unsafe folder setting for '{artist.get('name', '<unknown>')}'.")
+        return None
+    return folder_path
+
+
+def unique_folder_name(artists: list[dict], folder: str) -> str:
+    """Make a folder name distinct from existing artist folders."""
+    used = {str(artist.get("folder", "")).casefold() for artist in artists}
+    if folder.casefold() not in used:
+        return folder
+
+    number = 2
+    while f"{folder} ({number})".casefold() in used:
+        number += 1
+    return f"{folder} ({number})"
+
+
+def check_yt_dlp_available() -> bool:
     if shutil.which("yt-dlp") is None:
         print("\n[!] yt-dlp was not found on your PATH.")
         print("    Install it first, e.g.:  pip install -U yt-dlp\n")
@@ -108,7 +144,7 @@ def check_yt_dlp_available():
     return True
 
 
-def check_mutagen_available():
+def check_mutagen_available() -> bool:
     try:
         import mutagen  # noqa: F401
         return True
@@ -221,7 +257,9 @@ def set_cover_image(store: Store):
     if artist is None:
         return
 
-    folder_path = store.base_dir / artist["folder"]
+    folder_path = artist_folder_path(store, artist)
+    if folder_path is None:
+        return
     folder_path.mkdir(parents=True, exist_ok=True)
 
     existing = _find_existing_cover(folder_path)
@@ -262,7 +300,9 @@ def remove_cover_image(store: Store):
     if artist is None:
         return
 
-    folder_path = store.base_dir / artist["folder"]
+    folder_path = artist_folder_path(store, artist)
+    if folder_path is None:
+        return
     if not artist.get("cover") and _find_existing_cover(folder_path) is None:
         print("This artist has no cover image set.")
         return
@@ -408,7 +448,9 @@ def tag_artist_folder(store: Store, artist: dict) -> None:
     if not check_mutagen_available():
         return
 
-    folder_path = store.base_dir / artist["folder"]
+    folder_path = artist_folder_path(store, artist)
+    if folder_path is None:
+        return
     if not folder_path.is_dir():
         return
 
@@ -472,17 +514,20 @@ def add_artist(store: Store):
         print("Cancelled: URL cannot be empty.")
         return
 
-    folder = sanitize_folder_name(name)
-
     artists = store.load_artists()
     if any(a["url"] == url for a in artists):
         print("This artist URL is already in your list.")
         return
 
+    folder = unique_folder_name(artists, sanitize_folder_name(name))
+
     artists.append({"name": name, "url": url, "folder": folder})
     store.save_artists(artists)
 
-    (store.base_dir / folder).mkdir(parents=True, exist_ok=True)
+    folder_path = artist_folder_path(store, artists[-1])
+    if folder_path is None:
+        return
+    folder_path.mkdir(parents=True, exist_ok=True)
     print(f"Added '{name}' -> {url}")
 
     if prompt("Set a cover image now? [y/N]: ").strip().lower() == "y":
@@ -498,7 +543,9 @@ def add_artist(store: Store):
 def set_cover_image_for(store: Store, artist: dict):
     """Same flow as set_cover_image() but for an artist we already have,
     without re-prompting for which artist to pick."""
-    folder_path = store.base_dir / artist["folder"]
+    folder_path = artist_folder_path(store, artist)
+    if folder_path is None:
+        return
     folder_path.mkdir(parents=True, exist_ok=True)
 
     source = prompt("Path to an image file, or an http(s) URL (blank to skip): ").strip()
@@ -553,8 +600,10 @@ def remove_artist(store: Store):
     print(f"Removed '{removed['name']}' from the list (files on disk are kept).")
 
 
-def build_command(store: Store, artist: dict) -> list:
-    folder_path = store.base_dir / artist["folder"]
+def build_command(store: Store, artist: dict) -> list | None:
+    folder_path = artist_folder_path(store, artist)
+    if folder_path is None:
+        return None
     folder_path.mkdir(parents=True, exist_ok=True)
     output_template = str(folder_path / "%(title)s [%(id)s].%(ext)s")
 
@@ -577,6 +626,8 @@ def download_artist(store: Store, artist: dict):
     if not check_yt_dlp_available():
         return
     cmd = build_command(store, artist)
+    if cmd is None:
+        return
 
     print(f"\n>>> Downloading: {artist['name']}")
     print(" ".join(cmd), "\n")
