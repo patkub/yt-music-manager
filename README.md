@@ -1,6 +1,18 @@
 # yt-music-manager
 A little wrapper around yt-dlp
 
+## Prerequisites
+
+### yt-dlp
+```
+pipx install yt-dlp
+pipx inject yt-dlp yt-dlp-getpot-wpc
+```
+Reference
+- https://github.com/yt-dlp/yt-dlp
+- https://github.com/coletdjnz/yt-dlp-getpot-wpc
+
+
 ## Install
 ```
 cd ./src/
