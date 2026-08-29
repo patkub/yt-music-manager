@@ -24,8 +24,10 @@ $ yt-music
  3. List artists
  4. Remove an artist
  5. Manage ignore list
- 6. Re-tag all downloaded files (Album)
- 7. Exit
+ 6. Re-tag all downloaded files (Album + cover art)
+ 7. Set/update cover image for an artist
+ 8. Remove cover image for an artist
+ 9. Exit
 ==========================================
 
 Choose an option:
